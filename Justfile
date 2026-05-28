@@ -99,7 +99,7 @@ build $target_image $tag=default_tag $registry=image_registry $ns=image_ns:
         "${BUILD_ARGS[@]}" \
         --pull=newer \
         --tag "${registry}/${ns}/${target_image}:${tag}" \
-        -f "Containerfile.${target_image}"
+        -f "Containerfile.${target_image}" \
         .
 
 # Command: _rootful_load_image
