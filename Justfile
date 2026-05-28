@@ -1,4 +1,5 @@
-export image_name := env("IMAGE_NAME", "image-template") # output image name, usually same as repo name, change as needed
+export image_registry := env("IMAGE_REGISTRY", "ghcr.io")
+export image_ns := env("IMAGE_NS", "annie444")
 export default_tag := env("DEFAULT_TAG", "latest")
 export bib_image := env("BIB_IMAGE", "quay.io/centos-bootc/bootc-image-builder:latest")
 
@@ -86,7 +87,7 @@ sudoif command *args:
 #
 
 # Build the image using the specified parameters
-build $target_image=image_name $tag=default_tag:
+build $target_image $tag=default_tag $registry=image_registry $ns=image_ns:
     #!/usr/bin/env bash
 
     BUILD_ARGS=()
@@ -97,7 +98,8 @@ build $target_image=image_name $tag=default_tag:
     podman build \
         "${BUILD_ARGS[@]}" \
         --pull=newer \
-        --tag "${target_image}:${tag}" \
+        --tag "${registry}/${ns}/${target_image}:${tag}" \
+        -f "Containerfile.${target_image}"
         .
 
 # Command: _rootful_load_image
@@ -117,7 +119,7 @@ build $target_image=image_name $tag=default_tag:
 # 3. If the image is found, load it into rootful podman using podman scp.
 # 4. If the image is not found, pull it from the remote repository into reootful podman.
 
-_rootful_load_image $target_image=image_name $tag=default_tag:
+_rootful_load_image $target_image $tag=default_tag $registry=image_registry $ns=image_ns:
     #!/usr/bin/bash
     set -eoux pipefail
 
@@ -129,24 +131,25 @@ _rootful_load_image $target_image=image_name $tag=default_tag:
 
     # Try to resolve the image tag using podman inspect
     set +e
-    resolved_tag=$(podman inspect -t image "${target_image}:${tag}" | jq -r '.[].RepoTags.[0]')
+    resolved_tag=$(podman inspect -t image "${registry}/${ns}/${target_image}:${tag}" | jq -r '.[].RepoTags.[0]')
     return_code=$?
     set -e
 
-    USER_IMG_ID=$(podman images --filter reference="${target_image}:${tag}" --format "'{{ '{{.ID}}' }}'")
+    USER_IMG_ID=$(podman images --filter reference="${registry}/${ns}/${target_image}:${tag}" --format "'{{ '{{.ID}}' }}'")
 
     if [[ $return_code -eq 0 ]]; then
         # If the image is found, load it into rootful podman
-        ID=$(just sudoif podman images --filter reference="${target_image}:${tag}" --format "'{{ '{{.ID}}' }}'")
+        ID=$(just sudoif podman images --filter reference="${registry}/${ns}/${target_image}:${tag}" --format "'{{ '{{.ID}}' }}'")
         if [[ "$ID" != "$USER_IMG_ID" ]]; then
             # If the image ID is not found or different from user, copy the image from user podman to root podman
             COPYTMP=$(mktemp -p "${PWD}" -d -t _build_podman_scp.XXXXXXXXXX)
-            just sudoif TMPDIR=${COPYTMP} podman image scp ${UID}@localhost::"${target_image}:${tag}" root@localhost::"${target_image}:${tag}"
+            just sudoif TMPDIR=${COPYTMP} podman image scp \
+                ${UID}@localhost::"${registry}/${ns}/${target_image}:${tag}" root@localhost::"${registry}/${ns}/${target_image}:${tag}"
             rm -rf "${COPYTMP}"
         fi
     else
         # If the image is not found, pull it from the repository
-        just sudoif podman pull "${target_image}:${tag}"
+        just sudoif podman pull "${registry}/${ns}/${target_image}:${tag}"
     fi
 
 # Build a bootc bootable image using Bootc Image Builder (BIB)
@@ -158,13 +161,13 @@ _rootful_load_image $target_image=image_name $tag=default_tag:
 #   config: The configuration file to use for the build (default: disk_config/disk.toml)
 
 # Example: just _rebuild-bib localhost/fedora latest qcow2 disk_config/disk.toml
-_build-bib $target_image $tag $type $config: (_rootful_load_image target_image tag)
+_build-bib $target_image $tag $type $config $registry=image_registry $ns=image_ns: (_rootful_load_image target_image tag registry ns)
     #!/usr/bin/env bash
     set -euo pipefail
 
     args="--type ${type} "
     args+="--use-librepo=True "
-    args+="--rootfs=btrfs"
+    args+="--rootfs=xfs"
 
     BUILDTMP=$(mktemp -p "${PWD}" -d -t _build-bib.XXXXXXXXXX)
 
@@ -180,7 +183,7 @@ _build-bib $target_image $tag $type $config: (_rootful_load_image target_image t
       -v /var/lib/containers/storage:/var/lib/containers/storage \
       "${bib_image}" \
       ${args} \
-      "${target_image}:${tag}"
+      "${registry}/${ns}/${target_image}:${tag}"
 
     mkdir -p output
     sudo mv -f $BUILDTMP/* output/
@@ -195,34 +198,34 @@ _build-bib $target_image $tag $type $config: (_rootful_load_image target_image t
 #   config: The configuration file to use for the build (deafult: disk_config/disk.toml)
 
 # Example: just _rebuild-bib localhost/fedora latest qcow2 disk_config/disk.toml
-_rebuild-bib $target_image $tag $type $config: (build target_image tag) && (_build-bib target_image tag type config)
+_rebuild-bib $target_image $tag $type $config $registry=image_registry $ns=image_ns: (build target_image tag registry ns) && (_build-bib target_image tag type config registry ns)
 
 # Build a QCOW2 virtual machine image
 [group('Build Virtal Machine Image')]
-build-qcow2 $target_image=("localhost/" + image_name) $tag=default_tag: && (_build-bib target_image tag "qcow2" "disk_config/disk.toml")
+build-qcow2 $target_image $tag=default_tag $registry=image_registry $ns=image_ns: && (_build-bib target_image tag "qcow2" "disk_config/disk.toml" registry ns)
 
 # Build a RAW virtual machine image
 [group('Build Virtal Machine Image')]
-build-raw $target_image=("localhost/" + image_name) $tag=default_tag: && (_build-bib target_image tag "raw" "disk_config/disk.toml")
+build-raw $target_image $tag=default_tag $registry=image_registry $ns=image_ns: && (_build-bib target_image tag "raw" "disk_config/disk.toml" registry ns)
 
 # Build an ISO virtual machine image
 [group('Build Virtal Machine Image')]
-build-iso $target_image=("localhost/" + image_name) $tag=default_tag: && (_build-bib target_image tag "iso" "disk_config/iso.toml")
+build-iso $target_image $tag=default_tag $registry=image_registry $ns=image_ns: && (_build-bib target_image tag "iso" "disk_config/iso.toml" registry ns)
 
 # Rebuild a QCOW2 virtual machine image
 [group('Build Virtal Machine Image')]
-rebuild-qcow2 $target_image=("localhost/" + image_name) $tag=default_tag: && (_rebuild-bib target_image tag "qcow2" "disk_config/disk.toml")
+rebuild-qcow2 $target_image $tag=default_tag $registry=image_registry $ns=image_ns: && (_rebuild-bib target_image tag "qcow2" "disk_config/disk.toml" registry ns)
 
 # Rebuild a RAW virtual machine image
 [group('Build Virtal Machine Image')]
-rebuild-raw $target_image=("localhost/" + image_name) $tag=default_tag: && (_rebuild-bib target_image tag "raw" "disk_config/disk.toml")
+rebuild-raw $target_image $tag=default_tag $registry=image_registry $ns=image_ns: && (_rebuild-bib target_image tag "raw" "disk_config/disk.toml" registry ns)
 
 # Rebuild an ISO virtual machine image
 [group('Build Virtal Machine Image')]
-rebuild-iso $target_image=("localhost/" + image_name) $tag=default_tag: && (_rebuild-bib target_image tag "iso" "disk_config/iso.toml")
+rebuild-iso $target_image $tag=default_tag $registry=image_registry $ns=image_ns: && (_rebuild-bib target_image tag "iso" "disk_config/iso.toml" registry ns)
 
 # Run a virtual machine with the specified image type and configuration
-_run-vm $target_image $tag $type $config:
+_run-vm $target_image $tag $type $config $registry=image_registry $ns=image_ns:
     #!/usr/bin/bash
     set -eoux pipefail
 
@@ -234,7 +237,7 @@ _run-vm $target_image $tag $type $config:
 
     # Build the image if it does not exist
     if [[ ! -f "${image_file}" ]]; then
-        just "build-${type}" "$target_image" "$tag"
+        just "build-${type}" "$target_image" "$tag" "$registry" "$ns"
     fi
 
     # Determine an available port to use
@@ -265,24 +268,24 @@ _run-vm $target_image $tag $type $config:
 
 # Run a virtual machine from a QCOW2 image
 [group('Run Virtal Machine')]
-run-vm-qcow2 $target_image=("localhost/" + image_name) $tag=default_tag: && (_run-vm target_image tag "qcow2" "disk_config/disk.toml")
+run-vm-qcow2 $target_image $tag=default_tag $registry=image_registry $ns=image_ns: && (_run-vm target_image tag "qcow2" "disk_config/disk.toml" registry ns)
 
 # Run a virtual machine from a RAW image
 [group('Run Virtal Machine')]
-run-vm-raw $target_image=("localhost/" + image_name) $tag=default_tag: && (_run-vm target_image tag "raw" "disk_config/disk.toml")
+run-vm-raw $target_image $tag=default_tag $registry=image_registry $ns=image_ns: && (_run-vm target_image tag "raw" "disk_config/disk.toml" registry ns)
 
 # Run a virtual machine from an ISO
 [group('Run Virtal Machine')]
-run-vm-iso $target_image=("localhost/" + image_name) $tag=default_tag: && (_run-vm target_image tag "iso" "disk_config/iso.toml")
+run-vm-iso $target_image $tag=default_tag $registry=image_registry $ns=image_ns: && (_run-vm target_image tag "iso" "disk_config/iso.toml" registry ns)
 
 # Run a virtual machine using systemd-vmspawn
 [group('Run Virtal Machine')]
-spawn-vm rebuild="0" type="qcow2" ram="6G":
+spawn-vm $target_image rebuild="0" type="qcow2" ram="6G" $tag=default_tag $registry=image_registry $ns=image_ns:
     #!/usr/bin/env bash
 
     set -euo pipefail
 
-    [ "{{ rebuild }}" -eq 1 ] && echo "Rebuilding the ISO" && just build-vm {{ rebuild }} {{ type }}
+    [ "{{ rebuild }}" -eq 1 ] && echo "Rebuilding the ISO" && just rebuild-vm "$target_image" "$tag" "$registry" "$ns"
 
     systemd-vmspawn \
       -M "bootc-image" \
@@ -292,7 +295,6 @@ spawn-vm rebuild="0" type="qcow2" ram="6G":
       --network-user-mode \
       --vsock=false --pass-ssh-key=false \
       -i ./output/**/*.{{ type }}
-
 
 # Runs shell check on all Bash scripts
 lint:
