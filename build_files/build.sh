@@ -6,8 +6,6 @@ set -ouex pipefail
 
 /ctx/repos.sh
 
-dnf5 remove -y docker-buildx docker-cli docker-compose
-
-dnf5 distro-sync -y
+/ctx/install-pkgs.sh
 
 systemctl enable podman.socket
