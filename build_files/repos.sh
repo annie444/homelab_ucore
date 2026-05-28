@@ -1,6 +1,6 @@
 #!/bin/bash
+set -Eeuxo pipefail
 
-set -ouex pipefail
 { export PS4='+( ${BASH_SOURCE}:${LINENO} ): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'; } 2>/dev/null
 
 # shellcheck disable=SC1091

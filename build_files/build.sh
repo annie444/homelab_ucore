@@ -1,11 +1,17 @@
 #!/bin/bash
-
-set -ouex pipefail
+set -Eeuxo pipefail
 
 { export PS4='+( ${BASH_SOURCE}:${LINENO} ): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'; } 2>/dev/null
 
 /ctx/repos.sh
-
 /ctx/install-pkgs.sh
 
-systemctl enable podman.socket
+/ctx/fangfrisch.sh
+
+/ctx/firewalld.sh
+/ctx/pam.sh
+/ctx/postfix.sh
+
+/ctx/systemd.sh
+
+/ctx/cleanup.sh
